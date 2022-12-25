@@ -1,0 +1,81 @@
+cc_prebuilt_library_shared {
+    name: "vendor.aks.gamepad@1.0-impl",
+    relative_install_path: "hw",
+    target: {
+        android_arm: {
+            srcs: [
+                "lib/hw/vendor.aks.gamepad@1.0-impl.so",
+            ],
+        },
+        android_arm64: {
+            srcs: [
+                "lib64/hw/vendor.aks.gamepad@1.0-impl.so",
+            ],
+        },
+    },
+    shared_libs: [
+        "libc++",
+        "libcutils",
+        "libhidlbase",
+        "liblog",
+        "libutils",
+        "vendor.aks.gamepad@1.0",
+    ],
+    vendor: true,
+}
+
+cc_prebuilt_library_shared {
+    name: "vendor.aks.gamepad@1.0",
+    target: {
+        android_arm: {
+            srcs: [
+                "lib/vendor.aks.gamepad@1.0.so",
+            ],
+        },
+        android_arm64: {
+            srcs: [
+                "lib64/vendor.aks.gamepad@1.0.so",
+            ],
+        },
+    },
+    shared_libs: [
+        "libc++",
+        "libcutils",
+        "libhidlbase",
+        "liblog",
+        "libutils",
+    ],
+    vendor: true,
+}
+
+cc_prebuilt_binary {
+    name: "vendor.aks.gamepad@1.0-service",
+    relative_install_path: "hw",
+    srcs: [
+        "bin/hw/vendor.aks.gamepad@1.0-service",
+    ],
+    shared_libs: [
+        "libbinder",
+        "libc++",
+        "libcutils",
+        "libhardware",
+        "libhidlbase",
+        "liblog",
+        "libutils",
+        "vendor.aks.gamepad@1.0-impl",
+        "vendor.aks.gamepad@1.0",
+    ],
+    vintf_fragments: ["etc/vintf/manifest/vendor.aks.gamepad@1.0-service.xml"],
+    init_rc: [
+		"etc/init/vendor.aks.gamepad@1.0-service.rc",
+		"etc/init/init.vendor.aks.rc",
+	],
+    vendor: true,
+}
+
+prebuilt_hidl_interfaces {
+    name: "prebuilt_hidl_gamepad_interface",
+    interfaces: [
+        "vendor.aks.gamepad@1.0::IGamepad",
+    ],
+}
