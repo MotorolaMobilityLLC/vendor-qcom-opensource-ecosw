@@ -39,9 +39,7 @@
 
 #define ADS1015_DRV_NAME "aks-ads1015"
 
-#define TEST_KTHREAD 0 
 #define ENABLE_IRQ_PIN	0
-#define ENABLE_VDD_CONFIG 1
 #define ADS1015_CHANNELS 8
 
 #define ADS1015_CONV_REG	0x00
@@ -427,30 +425,12 @@ int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)
 	return regmap_read(data->regmap, ADS1015_CONV_REG, val);
 }
 
-#if 0
-irqreturn_t sensor_trigger_handler(int irq, void *p)
-{
-	u16 buf[8];
-	int i = 0;
-
-	/* read data for each active channel */
-	for_each_set_bit(bit, active_scan_mask, masklength)
-		buf[i++] = sensor_get_data(bit)
-
-	iio_push_to_buffers_with_timestamp(indio_dev, buf, timestamp);
-
-	iio_trigger_notify_done(trigger);
-	return IRQ_HANDLED;
-}
-#endif
-
 static irqreturn_t ads1015_trigger_handler(int irq, void *p)
 {
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct ads1015_data *data = iio_priv(indio_dev);
-	
-#if 1
+
 	int ret, res, bit, i=0;
 	struct {
 		s16 chans[3];
@@ -472,34 +452,7 @@ static irqreturn_t ads1015_trigger_handler(int irq, void *p)
 	
 	//dev_err(global_dev, "%s(%d) Triggered channels=%d, data[0]=0x%X, data[1]=0x%X, data[2]=0x%X\n",__FUNCTION__, __LINE__, i, scan.chans[0], scan.chans[1], scan.chans[2]);
 	iio_push_to_buffers_with_timestamp(indio_dev, &scan, iio_get_time_ns(indio_dev));
-#else
-	/* Ensure natural alignment of timestamp */
-	struct {
-		s16 chan;
-		s64 timestamp __aligned(8);
-	} scan;
 
-	int chan, ret, res;
-	memset(&scan, 0, sizeof(scan));
-
-	mutex_lock(&data->lock);
-	chan = find_first_bit(indio_dev->active_scan_mask, indio_dev->masklength);
-	
-	ret = ads1015_get_adc_result(data, chan, &res);
-	if (ret < 0) {
-		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
-		mutex_unlock(&data->lock);
-		goto err;
-	}
-
-	dev_err(global_dev, "[%d]Triggered chanel = %d, 0x%X \n", __LINE__, chan, res);
-
-	scan.chan = res;
-	mutex_unlock(&data->lock);
-
-	iio_push_to_buffers_with_timestamp(indio_dev, &scan,
-					   iio_get_time_ns(indio_dev));
-#endif
 err:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -881,97 +834,6 @@ static int ads1015_write_event_config(struct iio_dev *indio_dev,
 
 	return ret;
 }
-#if 0
-static int ads1015_set_trigger_state(struct iio_trigger *trig, bool state)
-{
-	const struct iio_dev         *indio_dev = dev_get_drvdata(trig->dev.parent);
-	const struct ads1015_data    *priv = iio_priv(indio_dev);
-	int                           err;
-
-	if (!state) {
-		/*
-		 * Switch trigger off : in case of failure, interrupt is left
-		 * disabled in order to prevent handler from accessing released
-		 * resources.
-		 */
-		unsigned int val;
-
-		/*
-		 * As device is working in continuous mode, handlers may be
-		 * accessing resources we are currently freeing...
-		 * Prevent this by disabling interrupt handlers and ensure
-		 * the device will generate no more interrupts unless explicitly
-		 * required to, i.e. by restoring back to default one shot mode.
-		 */
-		//disable_irq(priv->irq);
-
-		/*
-		 * Disable continuous sampling mode to restore settings for
-		 * one shot / direct sampling operations.
-		 */
-		err = ads1015_set_conv_mode(priv, ADS1015_SINGLESHOT);
-		if (err) {
-			dev_err(global_dev, "Can not switch to single shot mode");
-			return err;
-		}
-
-		/*
-		 * Re-enable interrupts only if we can guarantee the device will
-		 * generate no more interrupts to prevent handlers from
-		 * accessing released resources.
-		 */
-		//enable_irq(priv->irq);
-
-		dev_err(global_dev, "continuous mode stopped");
-	} else {
-		err = ads1015_set_conv_mode(priv, ADS1015_CONTINUOUS);
-
-		if (err) {
-			dev_err(global_dev, "Can not switch to continious mode");
-			return err;
-		}
-
-	}
-
-	return 0;
-}
-
-
-static const struct iio_trigger_ops ads1015_trigger_ops = {
-	.set_trigger_state = ads1015_set_trigger_state,
-};
-
-static int ads1015_init_managed_trigger(struct device          * parent,
-					struct iio_dev         *indio_dev,
-					struct ads1015_data   *private)
-{
-	struct iio_trigger *trigger;
-	int ret;
-
-	dev_err(parent, "%s(%d) ...\n",__FUNCTION__, __LINE__);
-
-	trigger = devm_iio_trigger_alloc(parent, "%s-dev%d",
-					 indio_dev->name,
-					 iio_device_id(indio_dev));
-	if (!trigger) {
-		dev_err(global_dev, "failed to devm_iio_trigger_alloc");
-		return -ENOMEM;
-	}
-
-	/* Basic setup. */
-	//trigger->ops = &ads1015_trigger_ops;
-
-	private->trigger = trigger;
-
-	/* Register to triggers space. */
-	ret = devm_iio_trigger_register(parent, trigger);
-	if (ret) {
-		dev_err(parent, "failed to register hardware trigger (%d)", ret);
-	}
-
-	return ret;
-}
-#endif
 
 #if ENABLE_IRQ_PIN
 static irqreturn_t ads1015_event_handler(int irq, void *priv)
@@ -989,17 +851,6 @@ static irqreturn_t ads1015_event_handler(int irq, void *priv)
 		dev_err(global_dev, "%s(%d) IRQ_HANDLED\n",__FUNCTION__, __LINE__);
 		return IRQ_HANDLED;
 	}
-
-#if 0
-	else {
-		if(last_conv_val!=val) {
-			dev_err(global_dev, "%s(%d) ADS1015_CONV_REG = 0x%X\n",__FUNCTION__, __LINE__, val);
-			last_conv_val = val;
-		}
-	}
-
-	iio_trigger_poll_chained(data->trigger);
-#endif
 
 	if (ads1015_event_channel_enabled(data)) {
 		enum iio_event_direction dir;
@@ -1175,9 +1026,7 @@ static void ads1015_get_channels_config(struct i2c_client *client)
 	}
 }
 
-#if ENABLE_VDD_CONFIG
 static int ads1015_config_vdd(struct ads1015_data *data)
-
 {
 	int ret = 0;
 	//struct iio_dev *indio_dev = i2c_get_clientdata(client);
@@ -1224,7 +1073,6 @@ static int ads1015_config_vdd(struct ads1015_data *data)
 	dev_err(data->dev, "%s(%d) success!\n",__FUNCTION__, __LINE__);
 	return 0;
 }
-#endif
 
 static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
 {
@@ -1232,45 +1080,6 @@ static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
 				  ADS1015_CFG_MOD_MASK,
 				  mode << ADS1015_CFG_MOD_SHIFT);
 }
-
-#if TEST_KTHREAD
-
-int _task_thread(void *data)
-{
-	struct ads1015_data *pdata = data;
-	int val1, val2 = 0;
-	while (1) {
-		if (kthread_should_stop()) {
-			break;
-		}
-		while(true) {
-			set_current_state(TASK_INTERRUPTIBLE);
-			regmap_read(pdata->regmap, ADS1015_CFG_REG, &val1);
-			regmap_read(pdata->regmap, ADS1015_CONV_REG, &val2);
-			dev_err(global_dev, "%s(%d) ADS1015_CFG_REG=0x%X, ADS1015_CONV_REG=0x%X\n",__FUNCTION__, __LINE__, val1, val2);
-			msleep(1);
-		}
-	}
-	return 0;
-}
-
-struct task_struct *th;
-
-static int thread_init(void *data)
-{
-
-	dev_err(global_dev, "%s(%d) --------------- \n",__FUNCTION__, __LINE__);
-	th = kthread_create(_task_thread, data, "_task_thread");
-
-	if (th) {
-		wake_up_process(th);
-	} else {
-		dev_err(global_dev, "%s(%d) --------------- \n",__FUNCTION__, __LINE__);
-	}
-
-	return 0;
-}
-#endif
 
 static int ads1015_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
@@ -1340,15 +1149,11 @@ static int ads1015_probe(struct i2c_client *client,
 		//dev_err(&client->dev, "%s(%d) thresh[%d] low: %d / high: %d\n",__FUNCTION__, __LINE__, i, data->thresh_data[i].low_thresh,data->thresh_data[i].high_thresh);
 	}
 
-#if ENABLE_VDD_CONFIG
-	//dev_err(&client->dev, "%s(%d)  %d, %d\n",__FUNCTION__, __LINE__, client->dev.power.runtime_error, client->dev.power.disable_depth);
-
 	ret = ads1015_config_vdd(data);
 	if (ret < 0) {
 		dev_err(&client->dev, "%s(%d) error when config vdd, code: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
 	}
-#endif
 
 	/* we need to keep this ABI the same as used by hwmon ADS1015 driver */
 	ads1015_get_channels_config(client);
@@ -1489,10 +1294,6 @@ static int ads1015_probe(struct i2c_client *client,
 
 	dev_err(&client->dev, "%s(%d) success........!\n",__FUNCTION__, __LINE__);
 
-#if TEST_KTHREAD
-	thread_init(data);
-#endif
-
 	global_dev = &client->dev;
 
 	return 0;
@@ -1506,54 +1307,35 @@ static int ads1015_remove(struct i2c_client *client)
 	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	iio_device_unregister(indio_dev);
-#if 1
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
-#endif
-	
-#if 0
-	/* power down single shot mode */
-	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
-#else
 	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
 	return regulator_disable(data->vdd_reg);
-#endif
 }
 
 #ifdef CONFIG_PM
 static int ads1015_runtime_suspend(struct device *dev)
 {
-#if 1
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
-	//dev_err(global_dev, "%s(%d) suspend...\n",__FUNCTION__, __LINE__);
+	dev_err(global_dev, "%s(%d) suspend...\n",__FUNCTION__, __LINE__);
 
 	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
-#else
-	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
-	return 0;
-#endif
 }
 
 static int ads1015_runtime_resume(struct device *dev)
 {
-#if 1
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
 	int ret;
 
-	//dev_err(global_dev, "%s(%d) resume...\n",__FUNCTION__, __LINE__);
+	dev_err(global_dev, "%s(%d) resume...\n",__FUNCTION__, __LINE__);
 	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
 	if (!ret) {
 		data->conv_invalid = true;
 	}
 
 	return ret;
-#else
-	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
-	return 0;
-
-#endif
 }
 #endif
 
