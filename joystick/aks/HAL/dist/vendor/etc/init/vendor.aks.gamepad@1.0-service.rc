@@ -1,4 +1,7 @@
 service vendor.aks.gamepad /vendor/bin/hw/vendor.aks.gamepad@1.0-service
+    interface vendor.aks.gamepad@1.0::IGamepad default
     class hal
     user system
     group system input
+    oneshot
+    disabled
