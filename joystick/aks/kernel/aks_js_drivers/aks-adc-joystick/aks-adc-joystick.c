@@ -280,6 +280,7 @@ struct aks_input_device {
 	struct mutex mutex;
 	struct mutex ipc_mutex;
 	int work_mode;
+	bool js_polling;
 };
 
 
@@ -988,7 +989,7 @@ static void aks_gamepad_gpio_keys_gpio_report_event(struct aks_gpio_button_data 
 			gpiod_get_value(bdata->gpiod) :
 			gpiod_get_value_cansleep(bdata->gpiod);
 	if (state < 0) {
-		dev_err(input->dev.parent, "failed to get gpio state: %d\n", state);
+		dev_err(input->dev.parent, "Error when gpiod get value, return state=%d\n", state);
 		return;
 	}
 
@@ -1007,7 +1008,7 @@ static void aks_gamepad_gpio_keys_gpio_report_event(struct aks_gpio_button_data 
 			if (state)
 				input_event(input, type, button->code, button->value);
 		} else {
-			dev_err(input->dev.parent, "Code=%d, state=%d\n", *bdata->code, state);
+			//dev_err(input->dev.parent, "Code=%d, state=%d\n", *bdata->code, state);
 
 			if(state) {
 				switch(button->code) {
@@ -1601,32 +1602,37 @@ static void aks_gamepad_analog_keys_poll(struct input_dev *input)
     s32 i, val, offset_val;
 	//int _x, _y, tx, ty, id;
 	//bool process = false;
-	if(joy->work_mode == AKS_GAMEPAD_WORK_MODE_DIRECT) {
-	    for (i = 0; i < joy->analog_data->num_chans; i++) {
-			axis = &joy->analog_data->axes[i];
-	        iio_read_channel_raw(&joy->analog_data->chans[i], &val);
-	        //dev_err(g_aks_dev->dev, "code=%d, channel[%d]=%d\n",joy->analog_data->axes[i].code, joy->analog_data->chans[i].channel->address, val);
 
-			if(axis->code == ABS_X || axis->code == ABS_Y || axis->code == ABS_Z || axis->code == ABS_RZ) {
-				val = (val < axis->cali.rang_min_calied) ? axis->cali.rang_min_calied : val;
-				val = (val > axis->cali.rang_max_calied) ? axis->cali.rang_max_calied : val;
-				offset_val = val;
-				if(val >= axis->cali.physic_zero_pos) {
+	if(joy->js_polling) {
+		if(joy->work_mode == AKS_GAMEPAD_WORK_MODE_DIRECT) {
+		    for (i = 0; i < joy->analog_data->num_chans; i++) {
+				axis = &joy->analog_data->axes[i];
+		        iio_read_channel_raw(&joy->analog_data->chans[i], &val);
+		        //dev_err(g_aks_dev->dev, "code=%d, channel[%d]=%d\n",joy->analog_data->axes[i].code, joy->analog_data->chans[i].channel->address, val);
+
+				if(axis->code == ABS_X || axis->code == ABS_Y || axis->code == ABS_Z || axis->code == ABS_RZ) {
+					val = (val < axis->cali.rang_min_calied) ? axis->cali.rang_min_calied : val;
+					val = (val > axis->cali.rang_max_calied) ? axis->cali.rang_max_calied : val;
+					offset_val = val;
+					if(val >= axis->cali.physic_zero_pos) {
+						offset_val = axis->cali.logic_zero_pos + ((axis->cali.ratio_pos * (val - axis->cali.physic_zero_pos)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
+					} else {
+						offset_val = axis->cali.logic_zero_pos - ((axis->cali.ratio_neg * (axis->cali.physic_zero_pos - val)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
+					}
+
+				} else if (axis->code == ABS_GAS || axis->code == ABS_BRAKE) {
+					val = (val < axis->cali.physic_zero_pos) ? axis->cali.physic_zero_pos : val;
 					offset_val = axis->cali.logic_zero_pos + ((axis->cali.ratio_pos * (val - axis->cali.physic_zero_pos)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
-				} else {
-					offset_val = axis->cali.logic_zero_pos - ((axis->cali.ratio_neg * (axis->cali.physic_zero_pos - val)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
 				}
-
-			} else if (axis->code == ABS_GAS || axis->code == ABS_BRAKE) {
-				val = (val < axis->cali.physic_zero_pos) ? axis->cali.physic_zero_pos : val;
-				offset_val = axis->cali.logic_zero_pos + ((axis->cali.ratio_pos * (val - axis->cali.physic_zero_pos)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
-			}
-			input_report_abs(input, axis->code, offset_val);
-	    }
-		input_sync(input);
-	}else if (joy->work_mode == AKS_GAMEPAD_WORK_MODE_TOUCH) {
-		if(enable_js_mt)
-			aks_gamepad_handle_js_to_touch(joy);
+				input_report_abs(input, axis->code, offset_val);
+		    }
+			input_sync(input);
+		}else if (joy->work_mode == AKS_GAMEPAD_WORK_MODE_TOUCH) {
+			if(enable_js_mt)
+				aks_gamepad_handle_js_to_touch(joy);
+		}
+	}else {
+		dev_err(g_aks_dev->dev, "Suspended, Pause the polling...\n");
 	}
 }
 
@@ -1857,7 +1863,6 @@ static int aks_gamepad_config_analog_keys(struct aks_input_device* aks_dev) {
 	int error;
 	int bits;
 	int i;
-	//unsigned int poll_interval;
 
 	adata = devm_kzalloc(dev, sizeof(*adata), GFP_KERNEL);
 	if (!adata) {
@@ -1898,6 +1903,7 @@ static int aks_gamepad_config_analog_keys(struct aks_input_device* aks_dev) {
 		return error;
 
 	if (adata->polled) {
+		aks_dev->js_polling = true;
 		input_setup_polling(aks_dev->input, aks_gamepad_analog_keys_poll);
 		input_set_poll_interval(aks_dev->input, AKS_GAMEPAD_ANALOG_POLL_INTERVAL);
 	} else {
@@ -2586,7 +2592,7 @@ static int aks_gamepad_probe(struct platform_device *pdev)
 
 	mutex_init(&g_aks_dev->mutex);
 	mutex_init(&g_aks_dev->ipc_mutex);
-	dev_err(g_aks_dev->dev, "------> AKS gamepad driver preobe done <------\n");
+	dev_err(g_aks_dev->dev, "------> AKS gamepad driver preobe done... <------\n");
     return 0;
 }
 
@@ -2605,6 +2611,29 @@ static int aks_gamepad_remove(struct platform_device *pdev)
 }
 
 
+//#if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND)
+static int aks_js_pm_suspend(struct device *dev)
+{
+	dev_err(g_aks_dev->dev, "------> aks_js_pm_suspend <------\n");
+	g_aks_dev->js_polling = false;
+	return 0;
+}
+
+static int aks_js_pm_resume(struct device *dev)
+{
+	dev_err(g_aks_dev->dev, "------> aks_js_pm_resume <------\n");
+	g_aks_dev->js_polling = true;
+	return 0;
+}
+//#endif
+
+
+//#if defined(CONFIG_PM) &&  !defined(CONFIG_HAS_EARLYSUSPEND)
+static const struct dev_pm_ops dev_pm_ops = {
+	.suspend = aks_js_pm_suspend,
+	.resume = aks_js_pm_resume,
+};
+//#endif
 static const struct of_device_id adc_joystick_of_match[] = {
     { .compatible = "aks,joystick_mt", },
     { }
@@ -2613,14 +2642,16 @@ MODULE_DEVICE_TABLE(of, adc_joystick_of_match);
 
 static struct platform_driver adc_joystick_driver = {
     .driver = {
-        .name = "aks-adc-joystick",
+        .name = "aks,joystick_mt",
         .of_match_table = adc_joystick_of_match,
+        .pm = &dev_pm_ops,
     },
     .probe = aks_gamepad_probe,
     .remove = aks_gamepad_remove,
 };
+
 module_platform_driver(adc_joystick_driver);
 
 MODULE_DESCRIPTION("Input driver for Aksys.co.kr All in one device.");
 MODULE_AUTHOR("Daniel <daniel@aksys.co.kr>");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL");
