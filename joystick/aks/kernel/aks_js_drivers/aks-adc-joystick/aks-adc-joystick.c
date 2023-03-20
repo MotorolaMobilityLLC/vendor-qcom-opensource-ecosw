@@ -78,6 +78,23 @@
 
 #define AKS_IOC_MAXNR 13
 
+#define POS_ZERO	(0)
+#define POS_MIN		(1)
+#define POS_MAX		(2)
+
+#define AKS_GAMEPAD_MT_MAX_CONTACTS  (MT_ID_MAX)
+
+#define AKS_GAMEPAD_BINDABLE_KEYS 21
+#define AKS_GAMEPAD_KEYCODE_BITS_MAX 16 //It MUST larger or equals the numbers of enum aks_input_key_bit_offset
+
+#define AKS_CDEV_MAJOR 190
+#define AKS_CDEV_NR_DEVS 2
+#define AKS_CDEV_SIZE 4096
+
+#define AKS_MAPPING_DATA_MAX_LENGTH 1024
+
+#define AKS_INPUT_CDEV_CLASS_MODE ((umode_t)(S_IRUGO |S_IWUGO))
+
 enum aks_input_key_bit_offset {
 	KEYCODE_BIT_OFFSET_A     = 0,
 	KEYCODE_BIT_OFFSET_B 	 = 1,
@@ -95,8 +112,23 @@ enum aks_input_key_bit_offset {
 	KEYCODE_BIT_OFFSET_R3 	 = 13,
 };
 
-#define AKS_GAMEPAD_BINDABLE_KEYS 21
-#define AKS_GAMEPAD_KEYCODE_BITS_MAX 16 //It MUST larger or equals the numbers of enum aks_input_key_bit_offset
+enum aks_cali_option_type {
+	CALI_OPTION_LS_CENTER    = 0,
+	CALI_OPTION_LS_OFFSET 	 = 1,
+	CALI_OPTION_RS_CENTER 	 = 2,
+	CALI_OPTION_RS_OFFSET 	 = 3,
+	CALI_OPTION_LT_ZERO 	 = 4,
+	CALI_OPTION_LT_MAX 	 	 = 5,
+	CALI_OPTION_RT_ZERO 	 = 6,
+	CALI_OPTION_RT_MAX 	     = 7,
+};
+
+enum aks_cali_status_type {
+	CALI_STATE_START    = 1,
+	CALI_STATE_STOP 	= 0,
+	CALI_STATE_CANCEL 	= 3,
+	CALI_STATE_SAVE 	= 2,
+};
 
 enum aks_input_mt_ids {
 	MT_ID_A = 1,
@@ -123,7 +155,11 @@ enum aks_input_mt_ids {
 	MT_ID_MAX,
 };
 	
-#define AKS_GAMEPAD_MT_MAX_CONTACTS  (MT_ID_MAX)
+struct aks_cdev_data
+{
+  char *data;
+  unsigned long size;
+};
 
 struct pair {
 	unsigned int keycode;
@@ -131,6 +167,12 @@ struct pair {
 	int y;
 	int id;
 };
+
+struct kv_pair {
+	char key[16];
+	char value[32];
+};
+
 
 struct coordinate {
 	int x;
@@ -239,7 +281,6 @@ struct aks_analog_key_data {
 	bool polled;
 };
 
-#define AKS_MAPPING_DATA_MAX_LENGTH 1024
 
 struct aks_multitouch_data {
 	struct aks_input_device *aks_dev;
@@ -284,6 +325,8 @@ struct aks_input_device {
 };
 
 
+struct kv_pair kvs[29];
+
 struct aks_input_device *g_aks_dev;
 
 static int CURRENT_WORK_MODE = AKS_GAMEPAD_WORK_MODE_DIRECT;
@@ -314,8 +357,15 @@ static struct keycode_keybit_map aks_gamepad_keycode_bit_map[] =
 	{ABS_GAS, KEYCODE_BIT_OFFSET_R2, MT_ID_R2, {0, 0}}, \
 };
 
-#define AKS_GAMEPAD_KEYCODE_BITS_COUNT (sizeof(aks_gamepad_keycode_bit_map)/sizeof(aks_gamepad_keycode_bit_map[0]))
+static struct aks_analog_key_axis user_calied_axis_lt;
+static struct aks_analog_key_axis user_calied_axis_rt;
+//static struct aks_analog_key_axis user_calied_axis_x;
+//static struct aks_analog_key_axis user_calied_axis_y;
+//static struct aks_analog_key_axis user_calied_axis_z;
+//static struct aks_analog_key_axis user_calied_axis_rz;
 
+
+#define AKS_GAMEPAD_KEYCODE_BITS_COUNT (sizeof(aks_gamepad_keycode_bit_map)/sizeof(aks_gamepad_keycode_bit_map[0]))
 
 static DECLARE_BITMAP(aks_gamepad_button_status, AKS_GAMEPAD_KEYCODE_BITS_MAX);
 
@@ -2061,17 +2111,6 @@ static int aks_gamepad_config_input_dev(struct platform_device *pdev) {
 }
 //endif
 
-
-struct aks_cdev_data
-{
-  char *data;
-  unsigned long size;
-};
-
-#define AKS_CDEV_MAJOR 190
-#define AKS_CDEV_NR_DEVS 2
-#define AKS_CDEV_SIZE 4096
-
 static int aks_cdev_major = AKS_CDEV_MAJOR;
  
 module_param(aks_cdev_major, int, S_IRUGO);
@@ -2173,12 +2212,7 @@ long aks_input_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 
 }
 
-struct kv_pair {
-	char key[16];
-	char value[32];
-};
 
-struct kv_pair kvs[29];
 
 static ssize_t aks_input_cdev_read(struct file *filp, char __user *buf, size_t size, loff_t *ppos)
 {
@@ -2432,7 +2466,6 @@ static int aks_gamepad_parse_mt_mapping_data(char* config) {
 	cur = data;
 
 	while ((token = strsep(&cur, delim))) {
-		//dev_err(g_aks_dev->dev, "%s\n", token);
 		pares_member(devp->mt_data, token, delim_next, index);
 		index++;
 	}
@@ -2442,24 +2475,234 @@ static int aks_gamepad_parse_mt_mapping_data(char* config) {
 	return 0;
 }
 
+static int aks_gamepad_cali_read_raw(int keycode)
+{
+	struct aks_analog_key_data *adata = g_aks_dev->analog_data;
+
+    int ret=0, i, val;
+
+	if (!adata) {
+		dev_err(g_aks_dev->dev, "%s(%d) error: adata NULL!\n",__FUNCTION__, __LINE__);
+		return -1;
+	}
+
+	msleep(3000); //waiting for the user action
+    for (i = 0; i < adata->num_chans; i++) {
+		if(adata->axes[i].code == keycode) {
+			ret = iio_read_channel_raw(&adata->chans[i], &val);
+			if (ret != IIO_VAL_INT) {
+				dev_err(g_aks_dev->dev, "%s(%d) error: %d !\n",__FUNCTION__, __LINE__, ret);
+				return -1;
+			} else {
+				//dev_err(g_aks_dev->dev, "code=%d, channel[%d], zero=%d, HW val=%d\n", adata->axes[i].code, adata->chans[i].channel->address, adata->axes[i].cali.physic_zero_pos, val);
+				return val;
+			}
+		}
+    }
+
+	return -1;
+}
+
+static void aks_gamepad_cali_cache(struct aks_analog_key_axis* axes, int keycode, int pos, int value)
+{
+	switch(pos) {
+		case POS_ZERO:
+			axes->code = keycode;
+			axes->cali.physic_zero_pos = value;
+			break;
+		case POS_MIN:
+			axes->code = keycode;
+			axes->cali.rang_min = value;
+			break;
+		case POS_MAX:
+			axes->code = keycode;
+			axes->cali.rang_max = value;
+			break;
+		default:
+			dev_err(g_aks_dev->dev, "%s(%d) Warning: Unknown pos=%d !\n",__FUNCTION__, __LINE__, pos);
+			break;
+	}
+}
+
+static int aks_gamepad_cali_save(struct aks_analog_key_axis* axes)
+{
+	struct aks_analog_key_data *adata = g_aks_dev->analog_data;
+
+    int i;
+
+	if (!adata) {
+		dev_err(g_aks_dev->dev, "%s(%d) error: adata NULL!\n",__FUNCTION__, __LINE__);
+		return -EINVAL;
+	}
+
+    for (i = 0; i < adata->num_chans; i++) {
+		if(adata->axes[i].code == axes->code) {
+			if(axes->cali.physic_zero_pos)
+				adata->axes[i].cali.physic_zero_pos = axes->cali.physic_zero_pos;
+			if(axes->cali.rang_min)
+				adata->axes[i].cali.rang_min = axes->cali.rang_min;
+			if(axes->cali.rang_max)
+				adata->axes[i].cali.rang_max = axes->cali.rang_max;
+
+			dev_err(g_aks_dev->dev, "%s(%d) Process key(%d), zero=%d, min=%d, max=%d\n", \
+				__FUNCTION__, __LINE__, \
+				adata->axes[i].code, \
+				adata->axes[i].cali.logic_zero_pos, \
+				adata->axes[i].cali.rang_min, \
+				adata->axes[i].cali.rang_max);
+
+			aks_gamepad_analog_calibrate(adata);
+			aks_gamepad_analog_update_paras(adata);
+			return 0;
+		}
+    }
+
+	dev_err(g_aks_dev->dev, "%s(%d) error: adata NULL!\n",__FUNCTION__, __LINE__);
+
+    return -1;
+}
+
+
+static int aks_gamepad_process_cali_start(int option) {
+	int hw_value = -1;
+	switch(option) {
+		case CALI_OPTION_LT_ZERO:
+			hw_value = aks_gamepad_cali_read_raw(ABS_BRAKE);
+			if(hw_value == -1) {
+				dev_err(g_aks_dev->dev, "%s(%d) error: %d !\n",__FUNCTION__, __LINE__, hw_value);
+				return -1;
+			} else {
+				aks_gamepad_cali_cache(&user_calied_axis_lt, ABS_BRAKE, POS_ZERO, hw_value);
+			}
+			break;
+		case CALI_OPTION_LT_MAX:
+			hw_value = aks_gamepad_cali_read_raw(ABS_BRAKE);
+			if(hw_value == -1) {
+				dev_err(g_aks_dev->dev, "%s(%d) error: %d !\n",__FUNCTION__, __LINE__, hw_value);
+				return -1;
+			} else {
+				aks_gamepad_cali_cache(&user_calied_axis_lt, ABS_BRAKE, POS_MAX, hw_value);
+			}
+			break;
+		case CALI_OPTION_RT_ZERO:
+			hw_value = aks_gamepad_cali_read_raw(ABS_GAS);
+			if(hw_value == -1) {
+				dev_err(g_aks_dev->dev, "%s(%d) error: %d !\n",__FUNCTION__, __LINE__, hw_value);
+				return -1;
+			} else {
+				aks_gamepad_cali_cache(&user_calied_axis_rt, ABS_GAS, POS_ZERO, hw_value);
+			}
+			break;
+		case CALI_OPTION_RT_MAX:
+			hw_value = aks_gamepad_cali_read_raw(ABS_GAS);
+			if(hw_value == -1) {
+				dev_err(g_aks_dev->dev, "%s(%d) error: %d !\n",__FUNCTION__, __LINE__, hw_value);
+				return -1;
+			} else {
+				aks_gamepad_cali_cache(&user_calied_axis_rt, ABS_GAS, POS_MAX, hw_value);
+			}
+			break;
+		default:
+			dev_err(g_aks_dev->dev, "%s(%d) ................. \n",__FUNCTION__, __LINE__);
+			break;
+	}
+	return 0;
+}
+
+static int aks_gamepad_process_cali_save(int option) {
+	switch(option) {
+		case CALI_OPTION_LT_MAX:
+			return aks_gamepad_cali_save(&user_calied_axis_lt);
+			break;
+		case CALI_OPTION_RT_MAX:
+			return aks_gamepad_cali_save(&user_calied_axis_rt);
+			break;
+		case CALI_OPTION_LS_OFFSET:
+		case CALI_OPTION_RS_OFFSET:
+			dev_err(g_aks_dev->dev, "%s(%d) ................. \n",__FUNCTION__, __LINE__);
+			break;
+	}
+
+	return 0;
+}
+
+
+static int aks_gamepad_generate_cali_data(int option, int status) {
+	switch (status) {
+		case CALI_STATE_START:
+			dev_err(g_aks_dev->dev, "calibrate state: start\n");
+			aks_gamepad_process_cali_start(option);
+			break;
+		case CALI_STATE_STOP:
+			dev_err(g_aks_dev->dev, "calibrate state: stop\n");
+			break;
+		case CALI_STATE_SAVE:
+			dev_err(g_aks_dev->dev, "calibrate state: save\n");
+			aks_gamepad_process_cali_save(option);
+			break;
+		case CALI_STATE_CANCEL:
+			dev_err(g_aks_dev->dev, "calibrate state: cancel\n");
+			break;
+		default:
+			dev_err(g_aks_dev->dev, "Unknown calibrate state: %d\n", status);
+			break;
+	}
+	return 0;
+}
+
+static int aks_gamepad_parse_user_calibrate(char* config) {
+	char* const delim= ";";
+	char *token, *cur;
+	char data[32] = {'\0'};
+	int option;
+	int status;
+
+	strcpy(data, config);
+	cur = data;
+
+	token = strsep(&cur, delim);
+	option = simple_strtol(token, NULL, 10);
+	token = strsep(&cur, delim);
+	status = simple_strtol(token, NULL, 10);
+	dev_err(g_aks_dev->dev, "option=%d, status=%d\n", option, status);
+	aks_gamepad_generate_cali_data(option, status);
+
+	return 0;
+}
 
 static ssize_t aks_input_cdev_write(struct file *filp, const char __user *buf, size_t size, loff_t *ppos)
 {
 	unsigned int count = size;
 	int ret = 0;
 	struct aks_input_device *devp = filp->private_data;
+	char user_data[AKS_MAPPING_DATA_MAX_LENGTH] = {'\0'};
+	char cali_data[32] = {'\0'};
 
 	mutex_lock(&devp->ipc_mutex);
-	//MUST reset the raw data buffer
-	memset(devp->mt_data->raw, '\0', AKS_MAPPING_DATA_MAX_LENGTH);
 
-	ret = copy_from_user((void *)(devp->mt_data->raw), buf, count);
+	ret = copy_from_user((void *)user_data, buf, count);
+
 	if (ret) {
 		dev_err(g_aks_dev->dev, "---> %s(%d) ->error=%d\n",__FUNCTION__, __LINE__, ret);
 	} else {
-		dev_err(g_aks_dev->dev, "--->(%d) -> %s\n", __LINE__, devp->mt_data->raw);
-		devp->mt_data->mapping_coords_index = 0;
-		aks_gamepad_parse_mt_mapping_data(devp->mt_data->raw);
+		//dev_err(g_aks_dev->dev, "--->(%d) Source(len=%d) -> %s\n", __LINE__,count, user_data);
+		switch(user_data[0]) {
+			case 'M':
+				//MUST reset the raw data buffer every time
+				memset(devp->mt_data->raw, '\0', AKS_MAPPING_DATA_MAX_LENGTH);
+				strcpy(devp->mt_data->raw, user_data+2); //ignore the first two chars
+				devp->mt_data->mapping_coords_index = 0;
+				//dev_err(g_aks_dev->dev, "--->(%d) Target -> %s\n", __LINE__, devp->mt_data->raw);
+				aks_gamepad_parse_mt_mapping_data(devp->mt_data->raw);
+				break;
+			case 'C':
+				strcpy(cali_data, user_data+2); //ignore the first two chars
+				dev_err(g_aks_dev->dev, "--->(%d) Cali data -> %s\n", __LINE__, cali_data);
+				aks_gamepad_parse_user_calibrate(cali_data);
+				break;
+			case 'F':
+				break;
+		}
 	}
 	mutex_unlock(&devp->ipc_mutex);
 	return ret;
@@ -2475,8 +2718,6 @@ static const struct file_operations aks_input_cdev_fops =
   .read = aks_input_cdev_read,
   .write = aks_input_cdev_write,
 };
-
-#define AKS_INPUT_CDEV_CLASS_MODE ((umode_t)(S_IRUGO |S_IWUGO))
 
 static char *aks_input_class_devnode(struct device *dev, umode_t *mode)
 {
@@ -2555,6 +2796,13 @@ static int aks_gamepad_cdev_init_ioctl() {
 	return result;
 }
 
+
+static void aks_gamepad_reset_user_cali_cache()
+{
+	memset(&user_calied_axis_lt, 0, sizeof(struct aks_analog_key_axis));
+	memset(&user_calied_axis_rt, 0, sizeof(struct aks_analog_key_axis));
+}
+
 static int aks_gamepad_probe(struct platform_device *pdev)
 {
     struct device *dev = &pdev->dev;
@@ -2592,7 +2840,9 @@ static int aks_gamepad_probe(struct platform_device *pdev)
 
 	mutex_init(&g_aks_dev->mutex);
 	mutex_init(&g_aks_dev->ipc_mutex);
-	dev_err(g_aks_dev->dev, "------> AKS gamepad driver preobe done... <------\n");
+
+	aks_gamepad_reset_user_cali_cache();
+	dev_err(g_aks_dev->dev, "------> AKS driver preobe done <------\n");
     return 0;
 }
 
