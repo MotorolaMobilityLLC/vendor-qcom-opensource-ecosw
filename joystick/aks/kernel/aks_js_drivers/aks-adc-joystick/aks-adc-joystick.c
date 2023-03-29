@@ -1090,7 +1090,7 @@ static void aks_gamepad_gpio_keys_quiesce_key(void *data)
 
 static bool only_key_mode(unsigned int code)
 {
-	if(code == BTN_MODE || code == KEY_SYSRQ || code == KEY_HOME || code == KEY_FN || code == BTN_A) {
+	if(code == BTN_MODE || code == KEY_SYSRQ || code == KEY_HOME || code == AKS_FUNC_KEY_BINDING_F1) {
 		return true;
 	} else {
 		return false;
@@ -3060,4 +3060,4 @@ module_platform_driver(adc_joystick_driver);
 
 MODULE_DESCRIPTION("Input driver for Aksys.co.kr All in one device.");
 MODULE_AUTHOR("Daniel <daniel@aksys.co.kr>");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL");
