@@ -513,21 +513,26 @@ static int touched_num = 0;
 
 static void aks_gamepad_mt_report_touch_event(struct aks_input_device *adev, int x, int y, int id, int state)
 {
-	if(adev->mt_data->mapping_props.rotation == 0) {
-		swap(x, y);
-	}
 
-	if(state) {
-		input_mt_slot(adev->mt_input, id);
-		input_mt_report_slot_state(adev->mt_input, MT_TOOL_FINGER, true);
-		input_report_abs(adev->mt_input, ABS_MT_POSITION_X, x);
-		input_report_abs(adev->mt_input, ABS_MT_POSITION_Y, y);
-		input_report_abs(adev->mt_input, ABS_MT_TOUCH_MAJOR, 0x6000);
+	if(adev->mt_input != NULL && id != 0) {
+		if(adev->mt_data->mapping_props.rotation == 0) {
+			swap(x, y);
+		}
+
+		if(state) {
+			input_mt_slot(adev->mt_input, id);
+			input_mt_report_slot_state(adev->mt_input, MT_TOOL_FINGER, true);
+			input_report_abs(adev->mt_input, ABS_MT_POSITION_X, x);
+			input_report_abs(adev->mt_input, ABS_MT_POSITION_Y, y);
+			input_report_abs(adev->mt_input, ABS_MT_TOUCH_MAJOR, 0x6000);
+		} else {
+			input_mt_slot(adev->mt_input, id);
+			input_mt_report_slot_state(adev->mt_input, MT_TOOL_FINGER, false);
+		}
+		state ? set_bit(id-1, aks_gamepad_touch_number) : clear_bit(id-1, aks_gamepad_touch_number);
 	} else {
-		input_mt_slot(adev->mt_input, id);
-		input_mt_report_slot_state(adev->mt_input, MT_TOOL_FINGER, false);
+		dev_err(adev->dev, "[%d]Warning, Ignored data adev->mt_input=%p id=%d)\n", __LINE__, adev->mt_input, id);
 	}
-	state ? set_bit(id-1, aks_gamepad_touch_number) : clear_bit(id-1, aks_gamepad_touch_number);
 }
 
 static int find_keycode_shift_bit_pos(unsigned int code) {
@@ -2539,7 +2544,7 @@ static int aks_gamepad_parse_mt_mapping_data(char* config) {
 	char *token, *cur;
 	int index = 0;
 
-	char data[512];
+	char data[AKS_MAPPING_DATA_MAX_LENGTH];
 	memset(data, '\0', sizeof(data));
 	strcpy(data, config);
 	cur = data;
@@ -2844,7 +2849,7 @@ static ssize_t aks_input_cdev_write(struct file *filp, const char __user *buf, s
 				memset(devp->mt_data->raw, '\0', AKS_MAPPING_DATA_MAX_LENGTH);
 				strcpy(devp->mt_data->raw, user_data+2); //ignore the first two chars
 				devp->mt_data->mapping_coords_index = 0;
-				//dev_err(g_aks_dev->dev, "--->(%d) Target -> %s\n", __LINE__, devp->mt_data->raw);
+				dev_err(g_aks_dev->dev, "--->(%d) Target -> %s\n", __LINE__, devp->mt_data->raw);
 				aks_gamepad_parse_mt_mapping_data(devp->mt_data->raw);
 				break;
 			case 'C':
