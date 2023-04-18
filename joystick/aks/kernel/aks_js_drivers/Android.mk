@@ -3,7 +3,7 @@
 LOCAL_PATH := $(call my-dir)
 
 ## Build/Package only in case of supported target
-#ifeq ($(call is-board-platform-in-list,taro kalama bengal), true)
+ifeq ($(call is-board-platform-in-list, kalama), true)
 
 JS_SELECT := CONFIG_AKS_ADC_JOYSTICK=m
 ##ifdef CONFIG_SLIMBUS
@@ -65,3 +65,4 @@ LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
 
 endif # DLKM check
+endif # target check
