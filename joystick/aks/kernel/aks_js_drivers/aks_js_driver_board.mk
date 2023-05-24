@@ -1,3 +1,4 @@
+ifeq ($(call is-board-platform-in-list, kalama), true)
 AKS_JS_DLKM_ENABLE := true
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
 	AKS_JS_DLKM_ENABLE := false
@@ -10,4 +11,5 @@ ifeq ($(AKS_JS_DLKM_ENABLE),  true)
 				$(KERNEL_MODULES_OUT)/aks-ads1015.ko
 		endif
 	endif
+endif
 endif
