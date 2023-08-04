@@ -2384,7 +2384,7 @@ static int fill_up_keycode_bit_map(unsigned int keycode, int x, int y) {
 		aks_gamepad_keycode_bit_map[pos].coord.y = y;
 		return 0;
 	} else {
-		dev_err(g_aks_dev->dev,"Warning, keycode %d not found in the bit-map!\n", keycode);
+		dev_err(g_aks_dev->dev,"W: Not found target keycode %d in mapping data. Ignore it\n", keycode);
 		return -1;
 	}
 }
