@@ -97,7 +97,7 @@ examples:
         #size-cells = <0>;
 
         adc@49 {
-            compatible = "aks,ti-ads1015";
+            compatible = "aks,ti-ads1015-0";
             reg = <0x49>;
             #address-cells = <1>;
             #size-cells = <0>;
