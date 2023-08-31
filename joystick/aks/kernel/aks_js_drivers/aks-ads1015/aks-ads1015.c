@@ -22,10 +22,11 @@
 #include <linux/delay.h>
 #include <linux/types.h>
 #include <linux/kthread.h>
+#include <linux/delay.h>
 
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
-
+#include <linux/regulator/driver.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/types.h>
@@ -35,6 +36,8 @@
 #include <linux/iio/trigger.h>
 #include <linux/iio/triggered_buffer.h>
 #include <linux/iio/trigger_consumer.h>
+
+#include "regulator_internal.h"
 
 #define	GET_BIT(x, bit)	((x & (1 << bit)) >> bit)	/* 获取第bit位 */
 
@@ -105,6 +108,8 @@ enum chip_ids {
 	ADSXXXX = 0,
 	ADS1015,
 	ADS1115,
+	ADS1015_0,
+	ADS1015_1,
 };
 
 enum ads1015_channels {
@@ -283,6 +288,7 @@ struct ads1015_data {
 	struct iio_trigger *trigger;
 	int irq;
 	struct mutex mutex;
+	enum chip_ids chip_id;
 };
 
 struct device *global_dev;
@@ -1032,7 +1038,59 @@ static void ads1015_get_channels_config(struct i2c_client *client)
 
 static int ads1015_enable_vdd(struct ads1015_data *data)
 {
-	int ret = 0, enabled = 0;
+	//struct regulator_dev* rdev;
+
+	int ret = 0;//, enabled = 0;
+	if(data->chip_id != ADS1015_0) {
+		dev_err(data->dev, "[Enable] Ignore the device: %d\n", data->chip_id);
+		return 0;
+	}
+#if 1
+
+	dev_err(data->dev, "%s(%d) start!\n",__FUNCTION__, __LINE__);
+
+	data->vdd_reg = devm_regulator_get(data->dev, "ti,vdd");
+	if (IS_ERR(data->vdd_reg)) {
+		ret = PTR_ERR(data->vdd_reg);
+		dev_err(data->dev, "couldn't get vdd_reg regulator, ret:%d\n", ret);
+		data->vdd_reg = NULL;
+		return ret;
+	} else {
+		dev_err(data->dev, "%s(%d) devm_regulator_get success!\n",__FUNCTION__, __LINE__);
+	}
+
+	dev_err(data->dev, "%s(%d) regulator voltage min=%d, max=%d\n",__FUNCTION__, __LINE__, VDD_MIN_uV, VDD_MAX_uV);
+
+	ret = regulator_set_voltage(data->vdd_reg, VDD_MIN_uV, VDD_MAX_uV);
+	if (ret) {
+		dev_err(data->dev, "%s(%d) regulator_set_voltage faile: %d\n",__FUNCTION__, __LINE__, ret);
+		return ret;
+	}  else {
+		dev_err(data->dev, "%s(%d) regulator_set_voltage success\n",__FUNCTION__, __LINE__, ret);
+	}
+	ret = regulator_set_load(data->vdd_reg, VDD_LOAD_uA); 
+	if (ret) {
+		dev_err(data->dev, "%s(%d) regulator_set_load faile: %d\n",__FUNCTION__, __LINE__, ret);
+		return ret;
+	}
+	dev_err(data->dev, "%s(%d) [Before Enable] Regulator use_count=%d, always_on=%d\n",__FUNCTION__, __LINE__,data->vdd_reg->rdev->use_count, data->vdd_reg->always_on);
+	//rdev = data->vdd_reg;
+
+	ret = regulator_enable(data->vdd_reg);
+	if (ret < 0) {
+		dev_err(data->dev, "[After Enable] Enable failed error code:%d, use_count=\n", ret, data->vdd_reg->rdev->use_count);
+		regulator_set_voltage(data->vdd_reg, 0, VDD_LOAD_uV);
+		regulator_set_load(data->vdd_reg, 0);
+		return -EINVAL;
+	} else {
+		dev_err(data->dev, "%s(%d) regulator_enable success!\n",__FUNCTION__, __LINE__);
+		dev_err(data->dev, "%s(%d) [After Enable] Enable OK, use_count=%d\n",__FUNCTION__, __LINE__,data->vdd_reg->rdev->use_count);
+	}
+
+	dev_err(data->dev, "%s(%d) success!\n",__FUNCTION__, __LINE__);
+	return 0;
+
+#else
 	data->vdd_reg = regulator_get_optional(data->dev, "ti,vdd");
 
 	if (IS_ERR(data->vdd_reg)) {
@@ -1076,22 +1134,22 @@ static int ads1015_enable_vdd(struct ads1015_data *data)
 		ret = enabled;
 		dev_err(data->dev, "%s(%d) Error when check regulator status. code=%d",__FUNCTION__, __LINE__, ret);
 	}
-
+#endif
 	return ret;
 }
 
 static int ads1015_disable_vdd(struct ads1015_data *data)
 {
 	int ret = 0, enabled = 0;
-	data->vdd_reg = regulator_get_optional(data->dev, "ti,vdd");
-
+	if(data->chip_id != ADS1015_0) {
+		dev_err(data->dev, "[Disable] Ignore the device: %d\n", data->chip_id);
+		return 0;
+	}
+	data->vdd_reg = devm_regulator_get(data->dev, "ti,vdd");
 	if (IS_ERR(data->vdd_reg)) {
 		ret = PTR_ERR(data->vdd_reg);
 		dev_err(data->dev, "couldn't get vdd_reg regulator, ret:%d\n", ret);
 		data->vdd_reg = NULL;
-		if(ret == -ENODEV) {
-			return ERROR_GET_VDD_INFO;
-		}
 		return ret;
 	} else {
 		ret = PTR_ERR(data->vdd_reg);
@@ -1104,19 +1162,20 @@ static int ads1015_disable_vdd(struct ads1015_data *data)
 		dev_err(data->dev, "%s(%d) regulator disabled already. Ignore it\n",__FUNCTION__, __LINE__);
 		return 0;
 	} else if(enabled > 0) { //regulator enabled
-		dev_err(data->dev, "%s(%d) Try to disable the regulator...\n",__FUNCTION__, __LINE__);
+		dev_err(data->dev, "%s(%d) [Before disable]  Regulator use_count = %d, always_on=%d\n",__FUNCTION__, __LINE__,data->vdd_reg->rdev->use_count, data->vdd_reg->always_on);
+		dev_err(data->dev, "%s(%d) Now try to disable the regulator...\n",__FUNCTION__, __LINE__);
 		ret = regulator_disable(data->vdd_reg);
 		if(ret < 0) {
-			dev_err(data->dev, "%s(%d) Can not disable VDD, code = %d...\n",__FUNCTION__, __LINE__, ret);
+			dev_err(data->dev, "%s(%d) [After disable] Disable failed error code:%d, use_count=%d\n",__FUNCTION__, __LINE__, ret, data->vdd_reg->rdev->use_count);
 			return ret;
 		} else {
 			dev_err(data->dev, "%s(%d) VDD disabled succesfully...\n",__FUNCTION__, __LINE__);
+			dev_err(data->dev, "%s(%d) [After disable] Disable OK, use_count=%d\n",__FUNCTION__, __LINE__,data->vdd_reg->rdev->use_count);
 			return 0;
 		}
 	} else { //regulator check status error
 		dev_err(data->dev, "%s(%d) Error when check regulator status. code=%d",__FUNCTION__, __LINE__, ret);
 	}
-
 	return ret;
 
 }
@@ -1162,7 +1221,9 @@ static int ads1015_probe(struct i2c_client *client,
 		chip = id->driver_data;
 	switch (chip) {
 	case ADS1015:
-		dev_err(&client->dev, "%s(%d) chip id ADS1015\n",__FUNCTION__, __LINE__);
+	case ADS1015_1:
+	case ADS1015_0:
+		dev_err(&client->dev, "%s(%d) chip id ADS1015[%d]\n",__FUNCTION__, __LINE__, chip);
 		indio_dev->channels = ads1015_channels;
 		indio_dev->num_channels = ARRAY_SIZE(ads1015_channels);
 		indio_dev->info = &ads1015_info;
@@ -1180,6 +1241,7 @@ static int ads1015_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 
+	data->chip_id = chip;
 	data->event_channel = ADS1015_CHANNELS;
 	/*
 	 * Set default lower and upper threshold to min and max value
@@ -1194,13 +1256,11 @@ static int ads1015_probe(struct i2c_client *client,
 		//dev_err(&client->dev, "%s(%d) thresh[%d] low: %d / high: %d\n",__FUNCTION__, __LINE__, i, data->thresh_data[i].low_thresh,data->thresh_data[i].high_thresh);
 	}
 
-	ret = ads1015_enable_vdd(data);
-	if (ret < 0) {
-		if(ret == ERROR_GET_VDD_INFO) {
-			dev_err(&client->dev, "%s(%d) Warning: can not get regulator for this device, %d!\n",__FUNCTION__, __LINE__, ret);
-		} else {
-			dev_err(&client->dev, "%s(%d) error when get regulator, code: %d\n",__FUNCTION__, __LINE__, ret);
-			return ret;
+	if(chip == ADS1015_0) {
+		dev_err(data->dev, "[probe] Ignore the device: %d\n", data->chip_id);
+		ret = ads1015_enable_vdd(data);
+		if (ret < 0) {
+			dev_err(&client->dev, "%s(%d) error when enable vdd, code: %d\n",__FUNCTION__, __LINE__, ret);
 		}
 	}
 
@@ -1340,21 +1400,24 @@ static int ads1015_system_suspend(struct device *dev)
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
 
-	dev_err(dev, "%s(%d) start suspend...!\n",__FUNCTION__, __LINE__);
-
-	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
-	ret = ads1015_disable_vdd(data);
-	if (ret < 0) {
-		if(ret == ERROR_GET_VDD_INFO) {
-			dev_err(global_dev, "%s(%d) Warning: can not get regulator for this device, %d!\n",__FUNCTION__, __LINE__, ret);
-			return 0;
-		} else {
-			dev_err(global_dev, "%s(%d) error when get regulator, code: %d\n",__FUNCTION__, __LINE__, ret);
-			return ret;
-		}
+	if(data->chip_id != ADS1015_0) {
+		dev_err(data->dev, "[suspend] Ignore the device: %d\n", data->chip_id);
+		return 0;
 	}
 
-	return ret;
+	dev_err(dev, "%s(%d) start suspend = %d...!\n", __FUNCTION__, __LINE__, data->chip_id);
+
+	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+	msleep(1);
+	ret = ads1015_disable_vdd(data);
+	if (ret < 0) {
+		dev_err(global_dev, "%s(%d) error when disable vdd, code: %d\n",__FUNCTION__, __LINE__, ret);
+		//return ret;
+		//return 0;
+	}
+
+	//return ret;
+	return 0;
 }
 
 static int ads1015_system_resume(struct device *dev)
@@ -1362,25 +1425,28 @@ static int ads1015_system_resume(struct device *dev)
 	int ret = 0;
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
-
-	dev_err(dev, "%s(%d) start resume!\n",__FUNCTION__, __LINE__);
-
-	ret = ads1015_enable_vdd(data);
-	if (ret < 0) {
-		if(ret == ERROR_GET_VDD_INFO) {
-			dev_err(global_dev, "%s(%d) Warning: can not get regulator for this device, %d!\n",__FUNCTION__, __LINE__, ret);
-		} else {
-			dev_err(global_dev, "%s(%d) error when get regulator, code: %d\n",__FUNCTION__, __LINE__, ret);
-			return ret;
-		}
+	if(data->chip_id != ADS1015_0) {
+		dev_err(data->dev, "[resume] Ignore the device: %d\n", data->chip_id);
+		return 0;
 	}
 
+	dev_err(dev, "%s(%d) start resume = %d...!\n",__FUNCTION__, __LINE__, data->chip_id);
+#if 1
+	ret = ads1015_enable_vdd(data);
+	if (ret < 0) {
+		dev_err(global_dev, "%s(%d) error when enable vdd, code: %d\n",__FUNCTION__, __LINE__, ret);
+		//return ret;
+		//return 0;
+	}
+	msleep(1);
+#endif
 	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
 	if (!ret) { //OK
 		data->conv_invalid = true;
 	}
 
-	return ret;
+	//return ret;
+	return 0;
 }
 
 static const struct dev_pm_ops ads1015_pm_ops = {
@@ -1392,11 +1458,14 @@ static const struct dev_pm_ops ads1015_pm_ops = {
 static const struct i2c_device_id ads1015_id[] = {
 	{"ads1015", ADS1015},
 	{"ads1115", ADS1115},
+	{"ads1015_0", ADS1015_0},
+	{"ads1015_1", ADS1015_1},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, ads1015_id);
 
 static const struct of_device_id ads1015_of_match[] = {
+#if 0
 	{
 		.compatible = "aks,ti-ads1015",
 		.data = (void *)ADS1015
@@ -1405,6 +1474,17 @@ static const struct of_device_id ads1015_of_match[] = {
 		.compatible = "aks,ti-ads1015",
 		.data = (void *)ADS1115
 	},
+#endif
+	{
+		.compatible = "aks,ti-ads1015-0",
+		.data = (void *)ADS1015_0
+	},
+#if 1
+	{
+		.compatible = "aks,ti-ads1015-1",
+		.data = (void *)ADS1015_1
+	},
+#endif
 	{}
 };
 MODULE_DEVICE_TABLE(of, ads1015_of_match);
